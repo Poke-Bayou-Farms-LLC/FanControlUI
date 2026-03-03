@@ -12,8 +12,8 @@
     <Product>Universal Fan Hub</Product>
     <Description>Dynamic hardware telemetry and fan control engine.</Description>
     <Copyright>Copyright © 2026 Poke Bayou Farms, LLC</Copyright>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+	<AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <FileVersion>1.0.1.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
