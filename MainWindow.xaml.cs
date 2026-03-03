@@ -67,13 +67,19 @@ namespace FanControlUI
             get => _targetSpeed;
             set 
             {
-                _targetSpeed = value;
-                OnPropertyChanged(nameof(TargetSpeed));
-                OnPropertyChanged(nameof(SpeedText));
                 
-                if (IsManual && Sensor != null) 
+                float safeValue = Math.Clamp(value, 15f, 100f);
+
+                if (_targetSpeed != safeValue)
                 {
-                    Sensor.Control.SetSoftware(value);
+                    _targetSpeed = safeValue;
+                    OnPropertyChanged(nameof(TargetSpeed));
+                    OnPropertyChanged(nameof(SpeedText));
+                    
+                    if (IsManual && Sensor != null) 
+                    {
+                        Sensor.Control.SetSoftware(_targetSpeed);
+                    }
                 }
             }
         }
@@ -90,7 +96,6 @@ namespace FanControlUI
         private List<ISensor> _cpuTemperatureSensors = new List<ISensor>();
         private List<ISensor> _gpuTemperatureSensors = new List<ISensor>();
         
-        // Data binding collections
         private ObservableCollection<FanNode> _fanNodes = new ObservableCollection<FanNode>();
         private ObservableCollection<TelemetryNode> _telemetryNodes = new ObservableCollection<TelemetryNode>();
         
@@ -113,7 +118,7 @@ namespace FanControlUI
             InitializeComponent();
             
             ControllersList.ItemsSource = _fanNodes; 
-            TelemetryList.ItemsSource = _telemetryNodes; // Now bound to the new universal list
+            TelemetryList.ItemsSource = _telemetryNodes;
             
             this.Loaded += MainWindow_Loaded;
             this.Closing += MainWindow_Closing;
@@ -149,7 +154,6 @@ namespace FanControlUI
 
             foreach (IHardware hardware in _computer.Hardware)
             {
-                // 1. Hunt CPU Temperatures
                 if (hardware.HardwareType == HardwareType.Cpu)
                 {
                     foreach (ISensor sensor in hardware.Sensors)
@@ -158,7 +162,6 @@ namespace FanControlUI
                         {
                             _cpuTemperatureSensors.Add(sensor);
                             
-                            // Map specific cores for the UI
                             if (sensor.Name.Contains("Core #") || sensor.Name.Contains("Tctl") || sensor.Name.Contains("Package") || sensor.Name.Contains("CCD"))
                             {
                                 string cleanName = sensor.Name.Replace("CPU ", "");
@@ -168,7 +171,6 @@ namespace FanControlUI
                     }
                 }
 
-                // 2. Hunt GPU Temperatures
                 if (hardware.HardwareType == HardwareType.GpuNvidia || hardware.HardwareType == HardwareType.GpuAmd)
                 {
                     foreach (ISensor sensor in hardware.Sensors)
@@ -176,15 +178,12 @@ namespace FanControlUI
                         if (sensor.SensorType == SensorType.Temperature)
                         {
                             _gpuTemperatureSensors.Add(sensor);
-                            
-                            // Clean redundant "GPU" from the name if it exists, then format
                             string cleanName = sensor.Name.Replace("GPU ", "");
                             _telemetryNodes.Add(new TelemetryNode { Sensor = sensor, Name = $"GPU {cleanName}" });
                         }
                     }
                 }
 
-                // 3. Hunt Motherboard / Case / Hub Temperatures
                 if (hardware.HardwareType == HardwareType.Motherboard || hardware.HardwareType == HardwareType.SuperIO)
                 {
                     foreach (ISensor sensor in hardware.Sensors)
@@ -207,14 +206,12 @@ namespace FanControlUI
                     }
                 }
 
-                // 4. Hunt Root Fan Controllers
                 foreach (ISensor sensor in hardware.Sensors)
                 {
                     if (sensor.SensorType == SensorType.Control)
                         _fanNodes.Add(new FanNode { Sensor = sensor, Name = $"{hardware.Name} - {sensor.Name}", ParentType = hardware.HardwareType });
                 }
 
-                // 5. Hunt Sub-Hardware Fan Controllers
                 foreach (IHardware subHardware in hardware.SubHardware)
                 {
                     foreach (ISensor sensor in subHardware.Sensors)
@@ -237,11 +234,9 @@ namespace FanControlUI
 
                 Application.Current.Dispatcher.Invoke(() =>
                 {
-                    // Update Global Max
                     CpuMaxTempText.Text = $"{Math.Round(currentCpuMax, 1)} °C";
                     GpuMaxTempText.Text = $"{Math.Round(currentGpuMax, 1)} °C";
 
-                    // Update ALL Individual System Sensors dynamically
                     foreach (var node in _telemetryNodes)
                     {
                         if (node.Sensor != null && node.Sensor.Value.HasValue)
@@ -251,7 +246,6 @@ namespace FanControlUI
                     }
                 });
 
-                // Update Fans
                 foreach (var fan in _fanNodes)
                 {
                     if (fan.IsAuto && fan.Sensor != null)
