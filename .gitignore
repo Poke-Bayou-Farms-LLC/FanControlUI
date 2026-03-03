@@ -1,23 +1,14 @@
-# === Visual Studio / .NET Core / WPF ===
-.vs/
-[Bb]in/
-[Oo]bj/
-*.user
+# .NET Core
+bin/
+obj/
+
+# User-specific files
+*.rsuser
 *.suo
+*.user
 *.userosscache
 *.sln.docstates
-*.dbmdl
-*.jfm
-.vscode/
-.idea/
+
+# OS generated files
 .DS_Store
 Thumbs.db
-ehthumbs.db
-*.publishproj
-*.[Pp]ublish.xml
-*.nupkg
-packages/
-*.cache
-*.log
-*.pfx
-*.snk
