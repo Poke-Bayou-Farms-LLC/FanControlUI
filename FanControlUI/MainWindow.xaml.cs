@@ -10,6 +10,31 @@ using LibreHardwareMonitor.Hardware;
 
 namespace FanControlUI
 {
+    public class TelemetryNode : INotifyPropertyChanged
+    {
+        public ISensor? Sensor { get; set; }
+        public string Name { get; set; } = string.Empty;
+
+        private float _value;
+        public float Value 
+        {
+            get => _value;
+            set 
+            {
+                if (_value != value)
+                {
+                    _value = value;
+                    OnPropertyChanged(nameof(ValueText));
+                }
+            }
+        }
+        
+        public string ValueText => $"{Math.Round(_value, 1)} °C";
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+        protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+
     public class FanNode : INotifyPropertyChanged
     {
         public ISensor? Sensor { get; set; }
@@ -46,7 +71,6 @@ namespace FanControlUI
                 OnPropertyChanged(nameof(TargetSpeed));
                 OnPropertyChanged(nameof(SpeedText));
                 
-                // Only command hardware directly from the slider if we are in Manual mode
                 if (IsManual && Sensor != null) 
                 {
                     Sensor.Control.SetSoftware(value);
@@ -66,8 +90,10 @@ namespace FanControlUI
         private List<ISensor> _cpuTemperatureSensors = new List<ISensor>();
         private List<ISensor> _gpuTemperatureSensors = new List<ISensor>();
         
-        
+        // Data binding collections
         private ObservableCollection<FanNode> _fanNodes = new ObservableCollection<FanNode>();
+        private ObservableCollection<TelemetryNode> _telemetryNodes = new ObservableCollection<TelemetryNode>();
+        
         private CancellationTokenSource? _cancellationTokenSource;
 
         public class UpdateVisitor : IVisitor
@@ -85,7 +111,10 @@ namespace FanControlUI
         public MainWindow()
         {
             InitializeComponent();
-            ControllersList.ItemsSource = _fanNodes; // Bind the data to the UI
+            
+            ControllersList.ItemsSource = _fanNodes; 
+            TelemetryList.ItemsSource = _telemetryNodes; // Now bound to the new universal list
+            
             this.Loaded += MainWindow_Loaded;
             this.Closing += MainWindow_Closing;
         }
@@ -94,14 +123,14 @@ namespace FanControlUI
         {
             InitializeUniversalHardware();
             
-            if (_fanNodes.Count > 0)
+            if (_fanNodes.Count > 0 || _telemetryNodes.Count > 0)
             {
                 _cancellationTokenSource = new CancellationTokenSource();
                 Task.Run(() => HardwareMonitoringLoop(_cancellationTokenSource.Token));
             }
             else
             {
-                MessageBox.Show("No fan controllers detected. Pre-built OEM locks may be active.", "Sensor Warning", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show("No hardware sensors detected. Administrator permissions may be missing.", "Initialization Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -111,7 +140,7 @@ namespace FanControlUI
             { 
                 IsCpuEnabled = true, 
                 IsMotherboardEnabled = true, 
-                IsControllerEnabled = true, // Required to catch external USB fan hubs
+                IsControllerEnabled = true,
                 IsGpuEnabled = true 
             };
             
@@ -120,28 +149,72 @@ namespace FanControlUI
 
             foreach (IHardware hardware in _computer.Hardware)
             {
-                // Hunt CPU Temps
+                // 1. Hunt CPU Temperatures
                 if (hardware.HardwareType == HardwareType.Cpu)
                 {
                     foreach (ISensor sensor in hardware.Sensors)
-                        if (sensor.SensorType == SensorType.Temperature) _cpuTemperatureSensors.Add(sensor);
+                    {
+                        if (sensor.SensorType == SensorType.Temperature)
+                        {
+                            _cpuTemperatureSensors.Add(sensor);
+                            
+                            // Map specific cores for the UI
+                            if (sensor.Name.Contains("Core #") || sensor.Name.Contains("Tctl") || sensor.Name.Contains("Package") || sensor.Name.Contains("CCD"))
+                            {
+                                string cleanName = sensor.Name.Replace("CPU ", "");
+                                _telemetryNodes.Add(new TelemetryNode { Sensor = sensor, Name = $"CPU {cleanName}" });
+                            }
+                        }
+                    }
                 }
 
-                // Hunt GPU Temps
+                // 2. Hunt GPU Temperatures
                 if (hardware.HardwareType == HardwareType.GpuNvidia || hardware.HardwareType == HardwareType.GpuAmd)
                 {
                     foreach (ISensor sensor in hardware.Sensors)
-                        if (sensor.SensorType == SensorType.Temperature) _gpuTemperatureSensors.Add(sensor);
+                    {
+                        if (sensor.SensorType == SensorType.Temperature)
+                        {
+                            _gpuTemperatureSensors.Add(sensor);
+                            
+                            // Clean redundant "GPU" from the name if it exists, then format
+                            string cleanName = sensor.Name.Replace("GPU ", "");
+                            _telemetryNodes.Add(new TelemetryNode { Sensor = sensor, Name = $"GPU {cleanName}" });
+                        }
+                    }
                 }
 
-                // Hunt Root Fan Controllers (GPU and External Hubs)
+                // 3. Hunt Motherboard / Case / Hub Temperatures
+                if (hardware.HardwareType == HardwareType.Motherboard || hardware.HardwareType == HardwareType.SuperIO)
+                {
+                    foreach (ISensor sensor in hardware.Sensors)
+                    {
+                        if (sensor.SensorType == SensorType.Temperature)
+                        {
+                            _telemetryNodes.Add(new TelemetryNode { Sensor = sensor, Name = $"MB {sensor.Name}" });
+                        }
+                    }
+                    
+                    foreach (IHardware subHardware in hardware.SubHardware)
+                    {
+                        foreach (ISensor sensor in subHardware.Sensors)
+                        {
+                            if (sensor.SensorType == SensorType.Temperature)
+                            {
+                                _telemetryNodes.Add(new TelemetryNode { Sensor = sensor, Name = $"SYS {sensor.Name}" });
+                            }
+                        }
+                    }
+                }
+
+                // 4. Hunt Root Fan Controllers
                 foreach (ISensor sensor in hardware.Sensors)
                 {
                     if (sensor.SensorType == SensorType.Control)
                         _fanNodes.Add(new FanNode { Sensor = sensor, Name = $"{hardware.Name} - {sensor.Name}", ParentType = hardware.HardwareType });
                 }
 
-                // Hunt Sub-Hardware Fan Controllers (Motherboard Super I/O)
+                // 5. Hunt Sub-Hardware Fan Controllers
                 foreach (IHardware subHardware in hardware.SubHardware)
                 {
                     foreach (ISensor sensor in subHardware.Sensors)
@@ -159,22 +232,31 @@ namespace FanControlUI
             {
                 _computer?.Accept(new UpdateVisitor());
 
-                float currentCpuTemp = GetMaxTemp(_cpuTemperatureSensors);
-                float currentGpuTemp = GetMaxTemp(_gpuTemperatureSensors);
+                float currentCpuMax = GetMaxTemp(_cpuTemperatureSensors);
+                float currentGpuMax = GetMaxTemp(_gpuTemperatureSensors);
 
                 Application.Current.Dispatcher.Invoke(() =>
                 {
-                    CpuTempText.Text = $"{Math.Round(currentCpuTemp, 1)} °C";
-                    GpuTempText.Text = $"{Math.Round(currentGpuTemp, 1)} °C";
+                    // Update Global Max
+                    CpuMaxTempText.Text = $"{Math.Round(currentCpuMax, 1)} °C";
+                    GpuMaxTempText.Text = $"{Math.Round(currentGpuMax, 1)} °C";
+
+                    // Update ALL Individual System Sensors dynamically
+                    foreach (var node in _telemetryNodes)
+                    {
+                        if (node.Sensor != null && node.Sensor.Value.HasValue)
+                        {
+                            node.Value = node.Sensor.Value.GetValueOrDefault();
+                        }
+                    }
                 });
 
+                // Update Fans
                 foreach (var fan in _fanNodes)
                 {
                     if (fan.IsAuto && fan.Sensor != null)
                     {
-                        // Thermal Decoupling: Route GPU temps to GPU fans, CPU temps to everything else
-                        float referenceTemp = (fan.ParentType == HardwareType.GpuNvidia || fan.ParentType == HardwareType.GpuAmd) ? currentGpuTemp : currentCpuTemp;
-                        
+                        float referenceTemp = (fan.ParentType == HardwareType.GpuNvidia || fan.ParentType == HardwareType.GpuAmd) ? currentGpuMax : currentCpuMax;
                         float targetSpeed = CalculateFanSpeed(referenceTemp);
 
                         Application.Current.Dispatcher.Invoke(() =>
