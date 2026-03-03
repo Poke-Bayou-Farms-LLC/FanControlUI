@@ -3,7 +3,7 @@
 A dynamic, multi-channel hardware telemetry and fan control engine for Windows. This application opportunistically maps all available thermal probes (CPU, GPU, Motherboard) and dynamically generates independent control interfaces for every accessible fan header in your system.
 
 **Publisher:** Poke Bayou Farms, LLC  
-**Repository:** [https://github.com/designategold7/FanControlUI](https://github.com/designategold7/FanControlUI)
+**Repository:** [https://github.com/Poke-Bayou-Farms-LLC/FanControlUI](https://github.com/Poke-Bayou-Farms-LLC/FanControlUI)
 
 ---
 
