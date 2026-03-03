@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -8,10 +10,13 @@ namespace FanControlUI
 {
     public partial class MainWindow : Window
     {
-        private Computer _computer;
-        private ISensor _cpuTempSensor;
-        private ISensor _caseFanControl;
-        private CancellationTokenSource _cancellationTokenSource;
+        private Computer? _computer;
+        private List<ISensor> _cpuTemperatureSensors = new List<ISensor>();
+        private List<ISensor> _allFanControllers = new List<ISensor>();
+        private CancellationTokenSource? _cancellationTokenSource;
+        
+        // Critical State Machine Flag
+        private bool _isAutoMode = true;
 
         public class UpdateVisitor : IVisitor
         {
@@ -34,25 +39,36 @@ namespace FanControlUI
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            InitializeHardware();
+            InitializeUniversalHardware();
             
-            if (_cpuTempSensor != null && _caseFanControl != null)
+            if (_cpuTemperatureSensors.Count > 0 && _allFanControllers.Count > 0)
             {
                 _cancellationTokenSource = new CancellationTokenSource();
                 Task.Run(() => HardwareMonitoringLoop(_cancellationTokenSource.Token));
             }
             else
             {
-                MessageBox.Show("Failed to detect sensors. The app will now exit. Ensure you run this as Administrator.", "Hardware Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                Application.Current.Shutdown();
+                string errorMsg = $"Initialization Diagnostics:\nCPU Temp Sensors Found: {_cpuTemperatureSensors.Count}\nFan Controllers Found: {_allFanControllers.Count}\n\nApp will run, but hardware control is unavailable.";
+                MessageBox.Show(errorMsg, "Sensor Mapping Warning", MessageBoxButton.OK, MessageBoxImage.Warning);
+                
+                // Keep UI alive but disable controls if no hardware is found
+                ModeToggleButton.IsEnabled = false;
+                ManualSpeedSlider.IsEnabled = false;
             }
         }
 
-        private void InitializeHardware()
+        private void InitializeUniversalHardware()
         {
-            _computer = new Computer { IsCpuEnabled = true, IsMotherboardEnabled = true, IsControllerEnabled = true };
+            _computer = new Computer 
+            { 
+                IsCpuEnabled = true, 
+                IsMotherboardEnabled = true, 
+                IsControllerEnabled = true,
+                IsGpuEnabled = true 
+            };
+            
             _computer.Open();
-            _computer.Accept(new UpdateVisitor());
+            _computer.Accept(new UpdateVisitor()); 
 
             foreach (IHardware hardware in _computer.Hardware)
             {
@@ -60,23 +76,23 @@ namespace FanControlUI
                 {
                     foreach (ISensor sensor in hardware.Sensors)
                     {
-                        if (sensor.SensorType == SensorType.Temperature && sensor.Name.Contains("Package"))
-                            _cpuTempSensor = sensor;
+                        if (sensor.SensorType == SensorType.Temperature)
+                            _cpuTemperatureSensors.Add(sensor);
                     }
                 }
 
-                if (hardware.HardwareType == HardwareType.Motherboard)
+                foreach (ISensor sensor in hardware.Sensors)
                 {
-                    foreach (IHardware subHardware in hardware.SubHardware)
+                    if (sensor.SensorType == SensorType.Control)
+                        _allFanControllers.Add(sensor);
+                }
+
+                foreach (IHardware subHardware in hardware.SubHardware)
+                {
+                    foreach (ISensor sensor in subHardware.Sensors)
                     {
-                        foreach (ISensor sensor in subHardware.Sensors)
-                        {
-                            if (sensor.SensorType == SensorType.Control)
-                            {
-                                // Grabs the first fan controller found for demonstration
-                                _caseFanControl = sensor;
-                            }
-                        }
+                        if (sensor.SensorType == SensorType.Control)
+                            _allFanControllers.Add(sensor);
                     }
                 }
             }
@@ -86,21 +102,33 @@ namespace FanControlUI
         {
             while (!token.IsCancellationRequested)
             {
-                _computer.Accept(new UpdateVisitor());
+                _computer?.Accept(new UpdateVisitor());
 
-                float currentTemp = _cpuTempSensor.Value ?? 0f;
-                float targetFanSpeed = CalculateFanSpeed(currentTemp);
+                float currentTemp = 0f;
+                var validTemps = _cpuTemperatureSensors.Where(s => s.Value.HasValue).Select(s => s.Value.Value).ToList();
+                
+                if (validTemps.Any())
+                {
+                    currentTemp = validTemps.Max();
+                }
 
+                // UI Update for Temperature is always active
                 Application.Current.Dispatcher.Invoke(() =>
                 {
                     CpuTempText.Text = $"{Math.Round(currentTemp, 1)} °C";
-                    FanSpeedText.Text = $"{Math.Round(targetFanSpeed, 1)} %";
                 });
 
-                // Safety check to ensure we don't push null values to the hardware
-                if (_caseFanControl != null)
+                // Hardware writes are locked behind the Auto mode flag
+                if (_isAutoMode)
                 {
-                    _caseFanControl.Control.SetSoftware(targetFanSpeed);
+                    float targetFanSpeed = CalculateFanSpeed(currentTemp);
+
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        FanSpeedText.Text = $"{Math.Round(targetFanSpeed, 1)} %";
+                    });
+
+                    ApplyFanSpeedToHardware(targetFanSpeed);
                 }
 
                 await Task.Delay(2000, token);
@@ -114,11 +142,55 @@ namespace FanControlUI
             return 30f + ((temperature - 40f) / (85f - 40f)) * (100f - 30f);
         }
 
-        private void MainWindow_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+        private void ApplyFanSpeedToHardware(float speed)
         {
-            if (_caseFanControl != null)
+            foreach (var controller in _allFanControllers)
             {
-                _caseFanControl.Control.SetDefault();
+                controller.Control.SetSoftware(speed);
+            }
+        }
+
+        // --- UI Event Handlers ---
+
+        private void ModeToggleButton_Click(object sender, RoutedEventArgs e)
+        {
+            _isAutoMode = !_isAutoMode; // Flip the state
+
+            if (_isAutoMode)
+            {
+                ModeToggleButton.Content = "Mode: AUTO (Dynamic Curve)";
+                ModeToggleButton.Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(51, 51, 51)); // Dark Gray
+                ManualSpeedSlider.IsEnabled = false;
+            }
+            else
+            {
+                ModeToggleButton.Content = "Mode: MANUAL (Slider Override)";
+                ModeToggleButton.Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(165, 42, 42)); // Brown/Red alert color
+                ManualSpeedSlider.IsEnabled = true;
+                
+                // Instantly apply whatever value the slider is currently sitting at
+                float sliderValue = (float)ManualSpeedSlider.Value;
+                FanSpeedText.Text = $"{sliderValue} % (Manual)";
+                ApplyFanSpeedToHardware(sliderValue);
+            }
+        }
+
+        private void ManualSpeedSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            // Only push to hardware if we are actually in manual mode
+            if (!_isAutoMode)
+            {
+                float newSpeed = (float)e.NewValue;
+                FanSpeedText.Text = $"{newSpeed} % (Manual)";
+                ApplyFanSpeedToHardware(newSpeed);
+            }
+        }
+
+        private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+        {
+            foreach (var controller in _allFanControllers)
+            {
+                controller.Control.SetDefault();
             }
             
             _cancellationTokenSource?.Cancel();
