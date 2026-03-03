@@ -7,6 +7,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    
+    <Company>Poke Bayou Farms, LLC</Company>
+    <Product>Universal Fan Hub</Product>
+    <Description>Dynamic hardware telemetry and fan control engine.</Description>
+    <Copyright>Copyright © 2026 Poke Bayou Farms, LLC</Copyright>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
